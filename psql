@@ -18,6 +18,9 @@
 # psql 
 #
 # History:
+#	2023/08/31
+#	Added to github, changed licensing to Apache
+#
 #	2003/11/07 00:15:13
 #	Added columntrunc setting to truncate header columns when they are longer
 #	than the data in the column.
