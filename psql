@@ -1,0 +1,3328 @@
+#!/usr/bin/perl
+
+# Copyright 2002-2023 Paul Walters
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     https://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#
+# psql 
+#
+# History:
+#	2003/11/07 00:15:13
+#	Added columntrunc setting to truncate header columns when they are longer
+#	than the data in the column.
+#	
+#	Added paramprompt setting to keep from being prompted to replace values in
+#	a SQL statement.
+#	
+#	Added additional arguments to the databaseConnect subroutine.
+#	
+#	Support saving statement history to ~/.psql_history.  History is read
+#	automatically at startup.
+#	
+#	Fixed MySQL column autosizing bugs.
+#	
+#	Allow semi-colons to end aliases and SQL filenames.
+#	
+#	2002/12/02 22:54:28
+#	Mysql host argument
+#	
+#	2002/11/01 03:43:46
+#	Perl triggers can now be defined to be executed before a result is returned,
+#	after each row of the set is returned, and after all rows have been returned.
+#	
+#	psql can be used as a normal Perl module.
+#	
+#	Added unalias command.
+#	
+#	Connection parameters are not required with -n flag.
+#	
+#	The version command now displays all pertinent information about the Perl
+#	installation.
+#	
+#	Fixed bug where go and run command must be on line 1 to execute.
+#	
+#	Hitting control-c now resets line number to 1.
+#	
+#	The connect command wasn't being added to the history correctly.
+#	
+#	Fixed problem determining column names when multiple result sets where
+#	returned.
+#	
+#	read command and -f command line flag will automatically append ".sql"
+#	if it doesn't exist on the file given and the file given doesn't exist.
+#	
+#	most commands must now be executed on line 1 otherwise they are considered
+#	an SQL statement.
+#	
+#	SQL statement formatting is maintained in history and between calls to
+#	edit program.
+#	
+#	2002/10/05 01:19:19paul
+#	Documentation cleanup.
+#	
+#	More portable stty flags.
+#	
+#	Removed many warnings from perl -w.
+#	
+#	Ability to abort with ctrl-d at Username or password.
+#	
+#	Oracle compatibility issues with $sth->rows being referenced.
+#	
+#	2002/09/25 17:01:56paul
+#	Fixed bug when statements were more than one line long.  They were
+#	being appended without a needed space.
+#	
+#	Fixed problem with some systems not liking stty cbreak.  Now more
+#	portable between Unix styles.
+#	
+#	Fixed readLine to determine erase, eof, and intr characters from stty.
+#	
+#	Added -f option to read SQL from a file.  Add read command to do the same.
+#	
+#	Make a guess at the default driver if none is specified.
+#	
+#	2002/09/20 01:26:32
+#	Modifications to support Oracle and DBI versions before 1.26.
+#	
+#	2002/09/12 03:58:26
+#	Initial checkin
+#	
+
+#
+# TODO:
+# disable and change & use.
+# multi-line recall is funky
+# import/export capability
+# set column format [###.##, MM/DD/YY, etc]
+# multi-line sql (begin/end blocks)?
+# don't send stuff following "--" to be prepared from sql statement.
+# It may be possible for control chars to be displayed then be able to delete past the start of the line.
+# BUGS:
+#    sp_help and others require AutoCommit on to function.  Also, stored 
+#    procedures that return output parameters along with other data can 
+#    have those parameters dispalyed out of place because of a bug with 
+#    fetchall_arrayref.
+#
+
+=head1 NAME
+
+psql - PSQL Tool - Version 2023.1
+
+=head1 SYNOPSIS
+
+psql [username\@server/password] [-h] [-l] [-n] [-s] [-V] [-D <database>] [-I <interfaces_file>] [-P <password>] [-R <driver>] [-S <server>] [-U <username>] [-f <filename>] [<sql_statement>]
+
+=head1 INTRODUCTION
+
+The psql program is a text-based command-line program used for 
+querying a database.  Normal operation is to present a prompt for
+input, then to execute any SQL code entered by the user.
+
+=head1 INSTALLATION
+
+To install psql, copy it to a location that is in your path, set the permissions so
+that the program is executable (example: "chmod 555 psql") and make sure the first
+line of the program points to the location of your Perl executable.  If not, change
+the first line to the appropriate location or make a link to the location specified
+above.
+
+=head1 PREREQUISITES
+
+This section lists the system requirements that must be met in
+order to use psql successfully.
+
+=head2 Perl
+
+psql requires a modern version of Perl.  This program was tested
+against Perl 5.6.0.  It is believed that any version of Perl 5.004
+or greater should work.
+
+=head2 Perl Modules
+
+psql requires the Perl DBI driver and the DBD driver for the
+type of database for which you are going to connect to.  In
+addition, the POSIX module is also used.  psql has been tested
+against the following versions of those modules:
+
+=over 4
+
+C<DBI 1.26> If an earlier version of DBI is used, queries with large result sets
+will use a lot of memory.
+
+C<DBD::Sybase 0.94>
+
+C<DBD::mysql 2.0415>
+
+C<DBD::ODBC 0.43>
+
+C<POSIX 1.03>
+
+=back
+
+=head1 STARTUP AND INITIALIZATION
+
+To execute psql, enter psql.  Without any arguments, psql will ask
+for a username and password and expect other needed variables to 
+have been set in the initialization file (see L<"Initialization File"> below).  
+
+psql will attempt to connect to a database using the username and
+password entered.  The username and password may be given on the
+command-line via a number of methods.  
+
+B<(WARNING: Giving a password on the command-line allows that password 
+to be visable to anyone with access to the computer system psql is running on.)>  
+
+B<Options>
+
+=over 4
+
+=item * B<username@server/password> specifies a combination of username, database server, and password to use when connecting to a database.
+
+=item * B<-h> print the usage statement for the program and exit.
+
+=item * B<-f filename> execute SQL statements in the given file.
+
+=item * B<-l> list available database drivers and exit.
+
+=item * B<-n> do not prompt for a username and password if not specified.
+
+=item * B<-s> limit the amount of status messages displayed during a psql session.
+
+=item * B<-V> print the psql version information and exit.
+
+=item * B<-D database> specify the name of the database to connect to.
+
+=item * B<-I interfaces_file> specify an alternate Sybase interfaces file.
+
+=item * B<-P password> specify a password to use while connecting to the database.
+
+=item * B<-R driver> specify a DBI database driver to use.
+
+=item * B<-S server> specify a database server to use.
+
+=item * B<-U username> specify a username to use while connecting to the database.
+
+=item * B<sql statement> SQL statement that will be executed after connecting to the database.
+
+=back 
+
+To specify a username, use the B<-U> argument.  To specify a password
+use the B<-P> argument.  The username and password can be specified
+with a B<-U> and B<-P> as long as they are the first arguments on
+the command line.  The password is seperated from the username with
+a I</> character.
+
+Examples:
+
+psql -U scott -P tiger
+
+psql scott/tiger
+
+Without the presence of an initialization file containing information
+on the database driver to use, the database driver must be specified
+on the command line.   To find a valid list of drivers, execute
+C<psql -l>.  To specify a driver use the B<-R> argument followed by
+the name of the driver.  If no driver is specified, B<psql> will attempt
+to determine the driver to use by looking at the list of available drivers.
+
+Example:
+
+psql scott/tiger -R Oracle
+
+Some database drivers require that a server be specified.  A server
+has different meanings to different drivers.  With the Oracle driver
+setting the server will also set the B<TWO_TASK> environment variable.
+With the Sybase driver setting server will also set the B<DSQUERY>
+environment variable.  To set the server, use the B<-S> option or
+include it as part of the username and password combination using the
+B<@> symbol when they are specified as the first argument to psql.
+
+Examples:
+
+psql scott/tiger -R Oracle -S myserver
+
+psql scott@myserver/tiger -R Oracle
+
+Some database drivers require that a database be specified.  To
+specify a particular database.  In many databases, this would have
+the same affect as issuing a B<use> command after connecting to the
+database.  Example:
+
+psql root/root -R mysql -D mysql
+
+For Sybase drivers, the ability to specify an alternative 
+interfaces file can be done with the B<-I> option.  
+
+If you wish to specify an SQL statement on the command line and then
+exit, you may do so.  Be sure the SQL statement is enclosed by B<">'s.
+
+Example:
+
+psql scott/tiger -R Oracle "select * from emp"
+
+Other options for psql:
+
+B<-f filename> File specified will be read and each line processed as if
+it were read from the command-prompt.  When all commands have been read,
+control is returned to the terminal.  To have a file execute and B<psql> 
+exit, add the I<quit> command at the end of the file.
+
+B<-n> will not prompt for a username and password if they are not supplied.
+This option can be combined with the B<-f> option to allow for specification
+of the username and password in that file.
+
+B<-s> limit the amount of status messages displayed during a psql session.
+
+B<-h> print the usage statement for the program and exit.
+
+B<-V> print the psql version information and exit.
+
+=head2 Initialization File
+
+psql reads an initialization file before attempting to connect to a database
+and before processing any command-line arguments.  The name of the file is
+F<.psqlrc> and must be present in a users home directory.  The first time
+psql executes and it doesn't find a .psqlrc file, it will ask to create one.
+If one is chosen to be created, a default file is created taking any of the
+command-line arguments passed.  An initialization file may contain the 
+following types of psql commands:
+
+=over 4
+
+=item * system variables
+
+=item * driver variables
+
+=item * set commands
+
+=item * alias commands
+
+=back
+
+System variables include: database_driver, interfaces, server, username,
+password, database, and max_rows.
+
+The B<database_driver> system variable will set the database driver as
+the B<-R> command-line option does.
+
+The B<interfaces> system variable will set the interfaces file as the
+B<-I> command-line option does.
+
+The B<database> system variable will set the username as the B<-D> 
+command-line option does.
+
+The B<server> system variable will set the server as the B<-S> 
+command-line option does.
+
+The B<username> system variable will set the username as the B<-U> 
+command-line option does.
+
+The B<password> system variable will set the username as the B<-P> 
+command-line option does.  Setting the password here prevents the password
+from being seen by others as long as the permissions on the F<.psqlrc>
+file prevent others from reading it.
+
+The B<max_rows> system variable set the cache size of records that
+are fetched at one time before performing another fetch.  Larger sizes
+require more amounts of memory.  Note that the logic for autosizing
+columns is dependant on this variable.  The smaller its value, the
+less accurate it will be at determining the correct column size except
+for the mysql driver which is able to automatically tell us the correct
+size.
+
+Driver variables are set in the DBI driver itself upon successfully
+connecting to the database.  The variable names are completely driver
+dependent.  See the L<"Initialization File Sample"> below for examples.
+Also see B<DBI(3)> and B<DBD::<driver>> for more details.
+
+psql allows the user to set many internal settings while using the
+program using a B<set> command.  B<set> commands may be included in
+the initialziation file.  See L<"Set Command"> below for details on
+the B<set> command.
+
+psql allows the user to create aliases for common commands they might
+execute using the B<alias> command.  B<alias> commands may be included
+in the initialization file.  See L<"Aliases"> below for details on
+creating aliases.
+
+=head2 Initialization File Sample
+
+This is a sample F<.psqlrc> file using a Sybase driver.
+
+ system database_driver Sybase
+ system interfaces /etc/interfaces
+ system server   myserver
+ system username sa
+ system password sapass
+ system database master
+ system max_rows 10000
+ driver Sybase syb_show_sql 1
+ driver Sybase syb_show_eed 1
+ set pager off
+ set seperator " | "
+ alias desc select C.colid 'id', C.name 'column_name', T.name 'column_type', C.length 'length', C.prec 'precision', C.scale 'scale', T.allownulls 'allownulls', C.status 'is_null' from syscolumns C, sysobjects O, systypes T where C.id = O.id and C.usertype = T.usertype and lower(O.name) = lower('&1')
+ alias show if ( '&1' = 'databases' ) select name from master..sysdatabases order by name else if ( '&1' = 'tables' ) select name from sysobjects where type = 'U' order by name
+ alias find select name from sysobjects where lower(name) like lower('%&1%') and type = 'U'
+ alias cols set resultsmode column
+ alias rows set resultsmode row
+
+=head1 DESCRIPTION
+
+Once psql has been started, a prompt is presented and awaits user input.
+User input can include any internal psql commands and aliases along with
+SQL statements that are sent to the database for execution.  
+
+=head2 Commands
+
+The prompt itself is a number indicating the line number of the current
+command.  Since commands may span multiple lines, this feature lets you
+know if psql is still awaiting more input before doing something.  Internal
+psql commands and aliases are executed if entered when the input line is
+labeled as I<1>.  No special commands or punctution are required to
+execute these types of commands.  SQL statements on the other hand must
+be terminated with one of several possible characters or statements.  
+
+The easiest method for terminating an SQL statement is with a semi-colon B<;>.
+Once a semi-colon is encountered, the statement is executed by the database
+driver.  In addition the command B<go>, the command B<run>, and the
+slash character B</> at the beginning of a line may also be used
+once you have entered your SQL statement to execute it.
+
+Examples:
+
+ 1> create table test (
+ 2> field1 numeric,
+ 3> field2 varchar(50),
+ 4> );
+ Statement processed.
+
+ 1> insert into test values ( 1, 'ABC' )
+ 2> go
+ 1 rows processed.
+
+ 1> select * from test;
+ f | fie
+ --+----
+ 1 | ABC
+ 1 rows returned.
+
+ 1> select * from test
+ 2> go
+ f | fie
+ --+----
+ 1 | ABC
+ 1 rows returned.
+
+Just entering the B<run> command, B<go> command, or the B</> character will
+alway execute the previous command.  Every command entered gets put into a
+history.  To see the command history, just enter the command B<history>. 
+All command history is saved in the file F<~/.psql_history> and is read in
+each time psql is started.  All the commands previously entered will be 
+listed.  The commands in the history can be executed in serval ways.  One 
+way is to simply use the run or go command followed by the history number.
+
+Example:
+
+ 1> history
+ Command History:
+	1> create table test (field1 numeric,field2 varchar(50),); 
+	2> insert into test values ( 1, 'ABC' )
+	3> select * from test;
+	4> select * from test
+ 1> run 3
+ select * from test;
+ f | fie
+ --+----
+ 1 | ABC
+ 1 rows returned.
+
+An easier method is just to enter the history number by itself.  Finally,
+using the up arrow and down arrow keys on the keyboard, you can cycle
+backward and forward in the command history.  You can edit an recalled
+history by using the right and left arrow keys along with the home and
+end keys.
+
+If you would prefer to use your favorite editor for editing commands, 
+just enter the B<edit> and the value of the EDITOR environment variable
+will be used to edit the previous SQL command.  By default it is the
+vi editor.  You may also specify a history number following the edit
+command to edit a specific SQL statement.
+
+=head2 Other Commands
+
+To exit the psql program, the commands B<quit> and B<exit> will do the 
+trick.
+
+To read a file containing SQL statements, use the B<read <filename>>
+command.  The file specified will be read and the commands executed.
+
+If you wish to reconnect to the database or a different database you
+may use the B<connect> command.  The connect command takes as arguments
+the same exact arguments that could be passed in on the command-line.
+
+It is possible to execute a system command from within psql without 
+exiting psql.  Start the command with an exclamation point followed by
+the name of the command and its arguments.
+
+The B<docs> command will display this documenation from within psql.
+
+The B<help> command will display a list of all the valid commands and a
+brief summary of each.
+
+The B<version> command will display the psql version and copyright
+information.
+
+=head2 SQL Parameters
+
+SQL statements can be written so that values for variables are filled in
+when the command is executed.  These parameters are prefixed with an
+ampersand character B<&>.  If the parameter is encountered for the first
+time, psql will prompt for a value for the parameter.  Each subsequent
+encounter with the parameter, the prompt will reappear, however, a default
+value will be listed which can be accepted simply be hitting enter.
+
+Example:
+
+ 1> select * from test where field1 = &value;
+ Enter value for &value: 1
+ select * from test where field1 = 1;
+ f | fie
+ --+----
+ 1 | ABC
+ 1 rows returned.
+ 1> run
+ select * from test where field1 = &value;
+ Enter value for &value [1]: 
+ select * from test where field1 = 1;
+ f | fie
+ --+----
+ 1 | ABC
+ 1 rows returned.
+
+The replaced SQL is printed then executed.  The SQL statement that gets added
+to the actual history can have the replaced parameter values or it can have
+the original SQL.  This depends on the setting of the I<"history substitution">
+setting discussed later on.
+
+=head2 Set Command
+
+The B<set> command allows the user to show and set various system settings.
+Running set without any other parameters will display the current system settings:
+
+ 1> set         
+ System Settings:
+	User     = sa
+	Database = mydb
+	Driver   = Sybase
+	Server   = 
+
+	autocommit = OFF
+	rowcount   = 0
+	verbose    = ON
+	history substitution = ON
+
+	delimeter   = ,
+	editor      = vi
+	resultsmode = ROW
+	seperator   = [ | ]
+	output      = 
+
+	paramprompt  = ON
+	autosize     = ON
+	autowrap     = ON
+	columntrunc  = OFF
+	columnwrap   = ON
+	headers      = ON
+	linesize     = DEFAULT
+	pagebreaks   = ON
+	pager        = OFF
+	pagercommand = more
+	pagesize     = DEFAULT
+
+	trigger row    =
+	trigger init   = 
+	trigger result =
+
+Each system setting can be changed by running the set command with certain
+arguments.  Each of those is now detailed.  Default values are uppercased
+below.
+
+=over 4
+
+=item * set autocommit <on|OFF>
+
+The autocommit setting determines if each SQL statement will be
+automatically commited.  When on, a commit is performed after
+every insert, update, and delete statement.  When it is off, 
+the user must explicitly commit or rollback each statement.  Note
+that all drivers do not support the autocommit feature.
+
+=item * set autosize <ON|off>
+
+The autosize setting will automatically determine the maximum size
+of each column in a result set.  Some drivers provide this information
+automatically.  For the rest, this is estimated and the sample size
+is taken from the B<max_rows> system variable.
+
+=item * set autowrap <ON|off>
+
+The autowrap feature will prevent a column from wrapping at the end
+of a line and will move the entire column to the start of the next
+line.
+
+=item * set column format <column_name> <width>
+
+The column format command will set a manual width size for a particular
+column name.  Manually setting a column width overrides any automatic
+column width calculation.  Setting a column with to the value of 0 will
+unset the manual setting.
+
+=item * set column justify <column_name> <LEFT|center|right>
+
+The column justify command will set the justification of a column in
+the results output to one of the valid values.
+
+=item * set columntrunc <on|OFF>
+
+The columntrunc command when set will cause column header names to be
+truncated if the maximum width of any field returned in a result set 
+is less than the length of the column name.  When set to off, columns
+will have a minimum size equal to the length of the column name.
+
+=item * set columnwrap <ON|off>
+
+The columnwrap command when set will wrap the values of a column to
+the next line and as many lines as necessary if the size of the column
+is larger than the size allocated for the column.  If this feature is
+off, the value will just be truncated.
+
+=item * set editor <editor>
+
+The editor command sets the name of the editor to use when executing
+the edit command.  The default is vi.
+
+=item * set headers [ON|off]
+
+The headers command will display column headers when enabled.
+
+=item * set history substitution [ON|off]
+
+When history substiution if off, all SQL statements that have parameters
+as defined above will not have the replaced parameter value put into the
+history.  The exact SQL statement as typed in by the user will be added
+to the history.  When history substitution is on, the replaced values
+will be used for the SQL that is added to the history.
+
+=item * set linesize <columns>
+
+The linesize command manually set the size of a line.  This value is
+automatically determined. 
+
+=item * set output [<filename>|OFF]
+
+Using the output command, specify the name of a file to which all output
+generated by psql will go in addition to the screen.  Sending B<OFF> to
+the output command will stop all output spooling.
+
+=item * set pagebreaks [ON|off]
+
+When pagebreaks are on, column headers are displayed every time the number
+of rows displayed has reached the size of the display.  
+
+=item * set pager [on|OFF]
+
+A pager is an external program such as B<more> or B<less> that will 
+receive the output generated by psql to allow a user to page through
+output results.
+
+=item * set pagercommand <command>
+
+Using the pagercommand setting, the pager program used can be set.  By
+default it is more.
+
+=item * set pagesize <rows>
+
+The pagesize command sets the number of lines per page.  This value is
+automatically determined by can be changed with this command.  This 
+size is used to determine how many rows from an SQL result will be
+displayed before redisplaying column headers.
+
+=item * set paramprompt <ON|off>
+
+The paramprompt feature will display a prompt for a parameter variable
+if encountered in an SQL statement.  Otherwise the statement is just
+passed on to the SQL engine.
+
+=item * set rowcount <rows>
+
+The rowcount command will limit the number of rows returned from an
+SQL result set to the value given.  Set this value to 0 to unset
+this feature.
+
+=item * set resultsmode <ROW|column|delim>
+
+There are three different ways for psql to display results.  By default
+is row mode where each row is displayed with column headers.  In column
+mode, each value is displayed one line at a time.  In delim mode, the
+results are similar to row mode however no special formatting takes place
+and results are delimited with the B<delimeter> setting.  This is useful
+for created such things as comma-seperated files.
+
+=item * set delimeter <delimeter>
+
+The delimeter is a value used to delimit delimited mode output.  When
+the system is running in delimeter mode, this value is used to seperate
+columns in each row.
+
+=item * set seperator [<column_seperator>]
+
+The seperator is used to seperate columns when in the row results mode.
+The seperator may be more than one character.
+
+=item * set trigger row [<subroutine>]
+
+When a trigger row subroutine is defined, the Perl subroutine named in the
+argument is called after fetching every row from the executing select
+statement.  The subroutine is passed an array of values that denote the
+fields returned from the select statement.  This subroutine may perform
+any processing it wishes.  
+
+If the subroutine returns a positive number, then psql will continue 
+processing the result set as it normally would (ie. display the results 
+of the query).  If the subroutine returns 0 or a negative value, then psql 
+will not perform any further action with the result set and get the next
+row.  However, if a 0 is returned, the rowcount will be incremented as
+if a positive result were returned.  If a negative value is returned, 
+the rowcount will not be incremented as if the row was never returned
+from the select.
+
+Using this set command without a subroutine name will disable
+the current processing of results with the previously defined subroutine.
+
+If the trigger row subroutine defined performs any screen output, then
+calling the subroutine I<printLine($str, $verbose)> should be used.  
+I<printLine> takes as an argument a string to display to the screen.  
+It will handle sending any results to a spool file if that is defined and
+running results through any defined pager commands.  Optionally I<printLine>
+takes a second argument that is a flag used to determine if the string
+passed to printLine should check the current verbose setting.
+If defined and verbose is off, then printLine will not display the 
+message.
+
+=item * set trigger init [<subroutine>]
+
+When a trigger init subroutine is defined, the Perl subroutine named in the
+argument is called once before starting a fetch of a result set.  The subroutine
+would typically be used for some sort of initialization.  Note for SQL dialects
+that can return multiple result sets (ex. Sybase), this subroutine will be 
+called once before the start of each result set.
+
+=item * set trigger result [<subroutine>]
+
+When a trigger result subroutine is defined, the Perl subroutine named in the
+argument is called once after all rows have been fetched from a result set.
+The subroutine would typically be used for some sort of post-processing.  Note
+for SQL dialects that can return multiple result sets (ex. Sybase), this subroutine
+will be called once after each result set.
+
+If the subroutine returns a 0, then psql will not output any further information
+pertaining to the result set such as the number of rows returned.  If the subroutine
+returns anything other than a 0, then psql will function as normal.
+
+=item * set trigger script <filename>
+
+This command specifies the Perl script file that contains the 
+subroutine that will be used by the L<"set trigger row"> command.
+As normal Perl modules do, the script itself should return 1 as the
+final thing to avoid any Perl warnings.
+
+=item * set verbose <ON|off>
+
+When verbose is off spurious informational statements such as the number
+of rows returned or processed are surpressed.
+
+=back
+
+=head2 Aliases
+
+Aliases allow a user to specify shortcut commands to be executed so
+longer commands do not have to always be entered.  Aliases can also
+take on parameters.  It is usually helpful to specify aliases in
+the L<initialization file>.  To display a list of all aliases defined
+just enter the command "alias".  The name of each alias followed by the
+text making up the alias is listed.  You may also see the text of a
+specific alias by giving the name of the alias to the alias command 
+(Sybase example):
+
+ 1> alias find
+ find - select name from sysobjects where lower(name) like lower('%&1%') and type = 'U'
+
+To execute an alias, just type in the name of the alias at the prompt
+giving any necessary parameters.
+
+ 1> find test
+ name
+ ----
+ test
+ 1 rows returned.
+
+Aliases can be defined with positional parameters that bein with an B<&> followed
+by a number indicating the position on the alias command line to substitute the
+value from.  In the find above example, the alias has one positional parameter.
+
+To undefine an alias, use the I<unalias> command followed by the name of the alias.
+
+=head1 psql Perl Module
+
+psql can be used as an included Perl module.  To do so a link called I<psql.pm>
+should be created against the I<psql> executable itself so that I<psql> can be
+imported into any Perl program with the I<require> or I<use> statements.
+
+The following subroutines are exported:
+
+=over 4
+
+=item * $dbh = databaseConnect( $user, $password, $driver, $host, $database )
+
+Takes as optional arguments the user, password, and driver name to use to connect
+to the database.  Returns a database handle on sucess.
+
+=item * databaseDisconnect( $dbh ) 
+
+Takes a database handle and disconnects.  Not closing a database connection will
+result in a warning message.
+
+=item * executeQuery ( $dbh, $sql_statement)
+
+Takes a database handle and a SQL statment and executes the statement displaying
+the results to the output device as if the query had been executed from the psql
+executable.  Trigger processing if defined will also be carried out.
+
+=item * printLine ($str, $verbose_flag)
+
+Displays the given string to the output device.
+
+=item * readLine ( FILE )
+
+Reads a line from the given filehandle and returns that result.
+
+=item * processCommands ( $dbh, $sql_statement )
+
+Similar to executeQuery however the full range of psql commands such as I<set> and I<alias> can be call in this function.
+
+The following module variables are exported mainly to support the use of query
+processing triggers as defined by L<"set trigger row">.
+
+=item * trigger_row_subroutine 
+
+Name of the subroutine executed for each row fetched.  See L<"set trigger row">.
+
+=item * trigger_init_subroutine 
+
+Name of the subroutine executed I<before> each row fetched.  See L<"set trigger init">.
+
+=item * trigger_result_subroutine
+
+Name of the subroutine executed I<after> each row fetched.  See L<"set trigger result">.
+
+=back
+
+=head1 TTY Processing
+
+This version of psql has been written to do reading of input in 
+a brute force method.  This method has only been tested on certain
+shells and operating systems and may not work everywhere.  A future 
+release of this program will take advantage of additional Perl 
+modules to allow for more portable code.
+
+=head1 AUTHOR
+
+by Paul Walters
+
+=head1 COPYRIGHT
+
+The psql program is Copyright 2002-2023 Paul Walters.
+All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+=head1 CONTRIBUTING
+
+If you find bugs, add new features, or enhance existing ones,
+please let the author know about them.  Either send a bug report
+or feature request or make the change yourself and send the new
+version to be incorporated into the next official release.
+
+=head1 Bugs
+
+While it is theoretically possible to have bugs in this program,
+it probably isn't likely.  What you will probably discover is some
+special feature added to the program by the author.  If you think
+you have found a bug just submit a report to the author detailing
+the bug and providing any necessary sample tables and data.  Be sure
+to include information about the operating system, database system,
+and drivers that you are using.  This information can be provided
+with the output of the B<version> command.
+
+=head1 SEE ALSO 
+
+B<DBI>
+
+B<Perl>
+
+=head1 OSNAMES
+
+psql was designed to work with the Unix operating system.  It
+has been tested to work against the following versions of that
+operating system:
+
+=over 4
+
+C<RedHat Linux 7.1, 7.2>
+
+C<Solaris 2.6>
+
+C<Windows 2000 under Cygwin> - really!
+
+=back
+
+=head1 SCRIPT CATEGORIES
+
+Networking
+
+=cut
+
+package psql;
+
+require 5.000;
+use DBI;
+use POSIX;
+use strict;
+
+# Constants
+
+use constant VERSION        => "PSQL Tool - Version 2023.1,\nCopyright (C) 2002-2023 of Paul Walters\npsql is free software and comes with ABSOLUTELY NO WARRANTY; for details type `license'.";
+use constant ROW_RESULTS    => 1;
+use constant COLUMN_RESULTS => 2;
+use constant DELIM_RESULTS  => 3;
+
+# These variables can be set with the set command:
+
+my $verbose = 1;
+my $results_mode = ROW_RESULTS;
+my $output_file = "";
+my $pagesize = 0;
+my $linesize = 0;
+my $autowrap = 1;
+my $autosize = 1;
+my $showheaders = 1;
+my $pagebreaks  = 1;
+my $paramprompt = 1;
+my $columntrunc = 0;
+my $columnwrap  = 1;
+my $column_seperator = " ";
+my $delimeter = ",";
+my $row_count = 0;
+my $use_pager = 0;
+my $pager_command = "more";
+my $editor = $ENV{EDITOR} || "vi";
+my $auto_commit = 0;
+my $history_substitution = 1;
+my $silent_connect = 0;
+our $trigger_row_subroutine = "";
+our $trigger_init_subroutine = "";
+our $trigger_result_subroutine = "";
+
+my $usage = "$0 [username\@server/password] [-n] [-h] [-l] [-s] [-V] [-D <database>] [-I <interfaces_file>] [-P <password>] [-R <driver>] [-S <server>] [-U <username>] [-f <filename>] [<sql_statement>]\n";
+my ( @column_names, @column_precision, @mysql_max_lengths );
+
+# Other variables
+
+my $cmd_line_sql = "";
+my $output_buffer = "";
+my $auto_commit_supported = 1;
+
+my $history_size = 500;
+my $history_index = -1;
+my @history = ();
+
+my @commands = ('go|run|/ [history#]       -- executes previous or specified command history', 
+                'history#                  -- executes specified command history',
+                'quit|exit                 -- exits $0 program', 
+                'edit|vi [history#]        -- edits previous command',
+                'read <filename>           -- read file and execute statements',
+                'set [command [options]]   -- shows/sets system settings',
+                'history                   -- displays previous commands',
+                'connect <connect options> -- connects to the given database',
+                '!<shell command>          -- executes the given shell command',
+                'docs                      -- displays the program documentation',
+                'help                      -- displays this information',
+                'license                   -- displays license',
+                'version                   -- displays program version information'
+);
+my @set_commands = ('set autocommit <on|OFF>',
+                    'set autosize <ON|off>',
+                    'set autowrap <ON|off>',
+                    'set column format <column_name> <width>',
+                    'set column justify <column_name> <LEFT|center|right>',
+                    'set columntrunc <on|OFF>',
+                    'set columnwrap <ON|off>',
+                    'set delimeter <delimeter>',
+                    'set editor <editor>',
+                    'set headers [ON|off]',
+                    'set history substitution [ON|off]',
+                    'set linesize <columns>',
+                    'set output [<filename>|OFF]',
+                    'set pagebreaks [ON|off]',
+                    'set pager [on|OFF]',
+                    'set pagercommand <command>',
+                    'set pagesize <rows>',
+                    'set paramprompt [ON|off]',
+                    'set rowcount <rows>',
+                    'set resultsmode <ROW|column|delim>',
+                    'set seperator [<column_seperator>]',
+                    'set trigger row [<subroutine>]',
+                    'set trigger init [<subroutine>]',
+                    'set trigger result [<subroutine>]',
+                    'set trigger script <filename>',
+                    'set verbose <ON|off>'
+);
+
+# System settings
+
+my $stdout = *STDOUT;
+my $stdin  = *STDIN;
+my $isatty = isatty(*STDIN);
+my $read_stdin = 1;
+if ( $isatty == 0 ) {
+    $pagesize = 66;
+    $linesize = 80;
+}
+
+# Get terminal settings for special characters.
+
+my ( $BSD, $STTY, $stty );
+
+$BSD  = -f "/vmunix";
+$STTY = "/bin/stty";
+$STTY = "/usr/bin/stty" if ( !-f $STTY );
+$STTY = `which stty` if ( !-f $STTY );    chomp ( $STTY );
+$STTY = "stty" if ( !-f $STTY );	# Not that this will work.
+
+my $tmp = $/;	# Save previous value of input record seperator.
+undef $/;	# Just do one giant read, not line at a time.
+$stty = `$STTY -a`;
+$/ = $tmp;	# Reset the input record seperator variable.
+
+my ($eof)   = ($stty =~ /eof = \^(.);/);
+my ($intr)  = ($stty =~ /intr = \^(.);/);
+my ($erase) = ($stty =~ /erase = \^(.);/);
+
+my ( %aliases, %column_widths, %column_justify, %auto_width, %param_values );
+my ( %system, %driver_options );
+my ( $dbh );
+
+
+# Figure out if this package has been included by something.  
+# If so it is not being executed as a standalone program so don't
+# go into the main routine.  Just initialize and return.
+
+use Exporter();
+
+our ( @ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS );
+
+my $standalone = 1;
+
+foreach my $key ( keys %INC ) {
+    my $include = $INC{$key};
+    my ( @path ) = split (/\//, $include);
+    $include = $path[$#path];
+    $include =~ s/\.p[lm]$//;
+
+    if ( $include eq __PACKAGE__ ) {
+        $standalone = 0;
+    }
+}
+
+if ( $standalone ) {
+    main();
+}
+else {
+    @ISA = qw(Exporter);
+    @EXPORT = qw(&databaseConnect &databaseDisconnect &executeQuery &processCommands
+                 &printLine &readLine
+                 $trigger_row_subroutine 
+                 $trigger_init_subroutine 
+                 $trigger_result_subroutine);
+    @EXPORT_OK = qw();
+    %EXPORT_TAGS = ();
+
+    initialize();
+}
+
+sub initialize 
+{
+    undef %aliases;
+    undef %column_widths;
+    undef %auto_width;
+    undef %param_values;
+
+    initSystemVars();
+    readInitFile();
+    readHistoryFile();
+}
+
+sub main 
+{
+    my $quit = 0;
+
+    while ( $quit == 0 ) {
+
+        initialize();
+
+        parseCommandLine();
+
+        $dbh = databaseConnect();
+
+        $SIG{INT} = "IGNORE";
+
+        $quit = processCommands ( $dbh, $cmd_line_sql );
+    }
+
+    databaseDisconnect ( $dbh );
+
+    exit 0;
+}
+
+sub processCommands
+{
+    my ( $dbh, $cmd_line_sql ) = @_;
+
+    my $quit = 0;
+    my $disconnect = 0;
+    my $line_number = 1;
+    my $sql = "";
+    my $line = "";
+    my $ret;
+    
+    while ( $quit == 0 && $disconnect == 0 ) {
+
+        my $add_to_history = 1;
+
+        if ( $cmd_line_sql eq "" ) {
+            $|=1;
+            printLine ("$line_number> ");
+            $|=0;
+            $line = readLine( $stdin, $line_number == 1 );
+            if ( $line eq "-1" ) {
+                if ( !$isatty ) {
+                    $quit = 1;
+                    last;
+                }
+                elsif ( !$read_stdin ) {
+                    # We are done reading a file, return control to the terminal.
+                    closeInputFile();
+                }
+                $line_number = 1;
+                next;
+            }
+        }
+        else {
+            $sql = $line = $cmd_line_sql;
+            $quit = 1;
+        }
+
+        if ( !defined ($line) || 
+            (($line_number == 1) && (($line =~ /^\s*quit\s*$/i) || 
+                                    ($line =~ /^\s*exit\s*$/i ) || 
+                                    ($line =~ /\c$eof/))) )
+        {
+            $dbh->commit if ( defined $dbh && $auto_commit_supported == 1 && $dbh->{AutoCommit} == 0 );
+            $add_to_history = 0;
+            $quit = 1;
+        }
+        elsif ( $line_number == 1 && $line =~ /^\s*connect/i ) {
+            $disconnect = 1;
+            databaseDisconnect ( $dbh );
+            my $args = $line;
+            $args =~ s/^connect\s*//;    chomp ( $args );
+            @ARGV = ();
+            my $escaped = 0;
+            for ( my $i = 0, my $idx = 0; $i < length($args); $i++ ) {
+                if ( substr($args,$i,1) eq "\"" ) {
+                    $escaped = ($escaped == 0 ? 1 : 0);
+                } 
+                elsif ( substr($args,$i,1) !~ /\s/ || $escaped ) {
+                    $ARGV[$idx] .= substr($args,$i,1);
+                }
+                elsif ( !$escaped && substr($args,$i-1,1) !~ /\s/ ) {
+                    $idx++;
+                }
+            }
+        }
+        elsif ( ($line =~ /^\s*run([\s\d]*)\s*/i) || 
+                ($line =~ /^\s*go([\s\d]*)\s*/i) || 
+                ($line =~ /^\s*\/([\s\d]*)\s*/) ||
+                ($line =~ /^(\d+)\;*\s*$/) || 
+                ($cmd_line_sql ne "") )
+        {
+            if ( ($1 ne "") && ($1 !~ /^\s+$/) ) {
+                if ( defined $history[$1-1] ) {
+                    $sql = $history[$1-1];
+                    printLine ("$sql\n");
+                }
+            }
+            else {
+                printLine ("$sql\n") if ( $line_number == 1 );
+            }
+
+            $line = $sql;
+            $sql = aliasParse($sql);
+
+            if ( $sql =~ /^set\s+/i ) {
+                processSetCommands($sql);
+            }
+            else {
+                if ( ($ret = executeQuery($dbh, $sql)) ne "-1" ) {
+                    $sql = $ret;
+                }
+            }
+            $line_number = 0;
+            $line = $sql if ( $history_substitution );   # gets history set correctly
+        }
+        elsif ( ($line_number == 1 ) && ( $line =~ /^\s*set\s*/i ) ) {
+            print OUT "$line\n" if ( $verbose && $output_file ne "" );
+            processSetCommands($line);
+            $line_number = 0;
+        }
+        elsif ( ($line_number == 1 ) && ( $line =~ /^\s*alias\s*/i ) ) {
+            print OUT "$line\n" if ( $verbose && $output_file ne "" );
+            aliasAdd($line);
+            $line_number = 0;
+        }
+        elsif ( ($line_number == 1 ) && ( $line =~ /^\s*unalias\s*/i ) ) {
+            print OUT "$line\n" if ( $verbose && $output_file ne "" );
+            aliasRemove($line);
+            $line_number = 0;
+        }
+        elsif ( ($line_number == 1 ) && ( $line =~ /^\s*read\s+(.*)/i ) ) {
+            openInputFile($1);
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( ($line_number == 1) && 
+               (($line =~ /^\s*edit([\s\d]*)\s*$/i ) || 
+                ($line =~ /^\s*vi([\s\d]*)\s*$/i)) ) 
+       {
+            if ( ($1 ne "") && ($1 !~ /^\s+$/) && defined $history[$1-1] ) {
+                    $sql = $history[$1-1];
+            }
+            if ( open ( EDIT, ">.sqlquery" ) ) {
+                print EDIT $sql;
+                close ( EDIT );
+                system ( "$editor .sqlquery" );
+                if ( open ( EDIT, ".sqlquery" ) ) {
+                    $sql = "";
+                    while ( <EDIT> ) { 
+                        $sql .= $_ ;
+                        $line_number +=1;
+                    }
+                    close ( EDIT );
+                    unlink ( ".sqlquery" );
+                }
+                else {
+                    printLine("ERROR: Cannot open temp file for editing. $!.\n");
+                }
+            }
+            else {
+                printLine("ERROR: Cannot open temp file for editing. $!.\n");
+            }
+            $line_number = 0;
+            $add_to_history = 0;
+        }
+        elsif ( ($line_number == 1 ) && ($line =~ /^\s*help\s*$/i) ) {
+            displayHelp();
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( ($line_number == 1 ) && ($line =~ /^\s*docs\s*$/i) ) {
+            system ( "perldoc $0" );
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( ($line_number == 1 ) && ($line =~ /^\s*license\s*$/i) ) {
+	    license();
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( ($line_number == 1 ) && ($line =~ /^\s*version\s*$/i) ) {
+            displayVersion();
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( ($line_number == 1) && ($line =~ /^\s*history\s*$/i) ) {
+            displayHistory();
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( $line_number == 1 && aliasLookup($line) == 1 ) {
+
+            $sql = aliasParse($line);
+
+            if ( $sql =~ /^set\s+/i ) {
+                processSetCommands($sql);
+            }
+            else {
+                if ( ($ret = executeQuery($dbh, $sql)) ne "-1" ) {
+                    $sql = $ret;
+                }
+            }
+            $line_number = 0;
+            $line = $sql if ( $history_substitution );   # gets history set correctly
+        }
+        elsif ( $line =~ /\;\s*$/ ) {
+            if ( $line_number == 1 ) {
+                $sql = "";
+            }
+            else {
+                $sql .= "\n";
+            }
+            $sql .= $line;
+            print OUT "$sql\n" if ( $verbose && $output_file ne "" );
+            if ( ($ret = executeQuery($dbh, $sql)) ne "-1" ) {
+                $sql = $ret;
+            }
+            $line_number = 0;
+            $line = $sql;   # gets history set correctly
+        }
+        elsif ( $line =~ /^\!(.+)/ ) {
+            system($1);
+            $line_number -= 1;
+            $add_to_history = 0;
+        }
+        elsif ( $line !~ /^\n$/ ) {
+            if ( $line_number == 1 ) {
+                $sql = "" 
+            }
+            else {
+                $sql .= "\n";
+            }
+            $sql .= $line;
+            $add_to_history = 0;
+        }
+        elsif ( $line =~ /^\n$/ ) {
+            print OUT "$line\n" if ( $verbose && $output_file ne "" );
+            $add_to_history = 0;
+        }
+
+        $line_number += 1 if ( $line !~ /^\n$/ );
+        
+        if ( $add_to_history ) {
+            if ( $history_index + 1 == $history_size ) {
+                $history_index = 0;
+            }
+            else {
+                $history_index += 1;
+            }
+            $history[$history_index] = $line;
+            addHistoryFile ( $line );
+        }
+    }
+    return ( $quit );
+}
+
+sub processSetCommands
+{
+    my ( $line ) = @_;
+
+    $line =~ s/\;\s*$//;
+    $line =~ s/^\s*//;
+
+    my ( @args ) = split(/[\s\=]+/,$line);
+
+    if ( @args == 1 ) {
+        printLine("System Settings:\n");
+	printLine("\tUser     = $system{username}\n");
+	printLine("\tDatabase = $system{database}\n");
+	printLine("\tDriver   = $system{database_driver}\n");
+	printLine("\tServer   = $system{server}\n");
+        printLine("\n");
+
+        $output_buffer = "";
+        $output_buffer .= sprintf "\tautocommit = %s\n", ($auto_commit == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\trowcount   = %d\n", $row_count;
+        $output_buffer .= sprintf "\tverbose    = %s\n", ($verbose == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\thistory substitution = %s\n", ($history_substitution == 1 ) ? "ON": "OFF";
+        printLine($output_buffer);
+        printLine("\n");
+
+        printLine ("\tdelimeter   = $delimeter\n");
+        printLine ("\teditor      = $editor\n");
+        printLine ("\tresultsmode = ROW\n") if ( $results_mode == ROW_RESULTS );
+        printLine ("\tresultsmode = COLUMN\n") if ( $results_mode == COLUMN_RESULTS );
+        printLine ("\tresultsmode = DELIM\n") if ( $results_mode == DELIM_RESULTS );
+        printLine ("\tseperator   = [$column_seperator]\n");
+        printLine ("\toutput      = $output_file\n");
+        printLine("\n");
+
+        $output_buffer = "";
+        $output_buffer .= sprintf "\tautosize     = %s\n", ($autosize == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\tautowrap     = %s\n", ($autowrap == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\tcolumntrunc  = %s\n", ($columntrunc == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\tcolumnwrap   = %s\n", ($columnwrap == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\tparamprompt  = %s\n", ($paramprompt == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\theaders      = %s\n", ($showheaders == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\tlinesize     = %s\n", ($linesize == 0 ) ? "DEFAULT": "$linesize";
+        $output_buffer .= sprintf "\tpagebreaks   = %s\n", ($pagebreaks == 1 ) ? "ON": "OFF";
+        $output_buffer .= sprintf "\tpager        = %s\n", ($use_pager == 1 ) ? "ON": "OFF";
+        printLine($output_buffer);
+
+        printLine ("\tpagercommand = $pager_command\n");
+
+        $output_buffer = "";
+        $output_buffer .= sprintf "\tpagesize     = %s\n", ($pagesize == 0 ) ? "DEFAULT": "$pagesize";
+        printLine ($output_buffer);
+        printLine("\n\ttrigger row     = $trigger_row_subroutine\n");
+        printLine("\ttrigger init    = $trigger_init_subroutine\n");
+        printLine("\ttrigger result  = $trigger_result_subroutine\n");
+    }
+    #
+    # set column format <column_name> <width>
+    #
+    elsif ( $args[1] =~ /^column$/i && $args[2] =~ /^format$/i ) {
+        if ( (@args != 5) && ($args[4] !~ /^[0-9]+$/) ) {
+            printLine("ERROR: set column format <column_name> <width>\n");
+        }
+        else {
+            $args[4] = undef if ( $args[4] == 0 );
+            $column_widths{$args[3]} = $args[4];
+        }
+    }
+    #
+    # set column justify <column_name> <LEFT|center|right>
+    #
+    elsif ( $args[1] =~ /^column$/i && $args[2] =~ /^justify$/i ) {
+        if ( @args != 5 && $args[4] !~ /^left$/i && $args[4] !~ /^center$/i && $args[4] !~ /^right$/i ) {
+            printLine("ERROR: set column justify <column_name> <LEFT|center|right>\n");
+        }
+        else {
+            $column_justify{$args[3]} = $args[4];
+        }
+    }
+    #
+    # set headers <ON|off>
+    #
+    elsif ( $args[1] =~ /^headers$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set headers <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $showheaders = 1;
+        }
+        else {
+            $showheaders = 0;
+        }
+    }
+    #
+    # set history substitution <ON|off>
+    #
+    elsif ( $args[1] =~ /^history$/i && $args[2] =~ /^sub\w*$/i ) {
+        if ( (@args != 4) && ($args[3] !~ /^on$/i) && 
+             ($args[3] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set history substitution <ON|off>\n");
+        }
+        elsif ( $args[3] =~ /on/i ) {
+            $history_substitution = 1;
+        }
+        else {
+            $history_substitution = 0;
+        }
+    }
+    #
+    # set linesize <columns>
+    #
+    elsif ( $args[1] =~ /^linesize$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^[0-9]+$/) ) {
+            printLine("ERROR: set linesize <rows>\n");
+        }
+        else {
+            $linesize = $args[2];
+        }
+    }
+    #
+    # set pagesize <rows>
+    #
+    elsif ( $args[1] =~ /^pagesize$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^[0-9]+$/) ) {
+            printLine("ERROR: set pagesize <rows>\n");
+        }
+        else {
+            $pagesize = $args[2];
+        }
+    }
+    #
+    # set rowcount <rows>
+    #
+    elsif ( $args[1] =~ /^rowcount$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^[0-9]+$/) ) {
+            printLine("ERROR: set rowcount <rows>\n");
+        }
+        else {
+            $row_count = $args[2];
+            if ( defined $dbh && $system{database_driver} eq "Sybase" ) {
+                $dbh->{syb_rowcount} = $args[2];
+            }
+        }
+    }
+    #
+    # set resultsmode <ROW|column|delim>
+    #
+    elsif ( $args[1] =~ /^resultsmode$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^row$/i) && 
+             ($args[2] !~ /^column$/i) && ($args[2] !~ /^comma$/i) ) 
+        {
+            printLine("ERROR: set resultsmode <ROW|column|delim>\n");
+        }
+        elsif ( $args[2] =~ /row/i ) {
+            $results_mode = ROW_RESULTS;
+        }
+        elsif ( $args[2] =~ /column/i ) {
+            $results_mode = COLUMN_RESULTS;
+        }
+        else {
+            $results_mode = DELIM_RESULTS;
+        }
+    }
+    #
+    # set delimeter <delimeter>
+    #
+    elsif ( $args[1] =~ /^delimeter$/i ) {
+        if ( @args != 3 ) {
+            printLine("ERROR: set delimeter <delimeter>\n");
+        }
+        else {
+            $delimeter = $args[2];
+        }
+    }
+    #
+    # set editor <editor>
+    #
+    elsif ( $args[1] =~ /^editor$/i ) {
+        if ( @args != 3 ) {
+            printLine("ERROR: set editor <editor>\n");
+        }
+        else {
+            $editor = $args[2];
+        }
+    }
+    #
+    # set autocommit <on|OFF>
+    #
+    elsif ( $args[1] =~ /^autocommit$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set autocommit <on|OFF>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $auto_commit = 1;
+            if ( defined $dbh ) {
+                $dbh->{AutoCommit} = 1;
+            }
+        }
+        else {
+            $auto_commit = 0;
+            if ( defined $dbh ) {
+                $dbh->{AutoCommit} = 0;
+            }
+        }
+    }
+    #
+    # set paramprompt <ON|off>
+    #
+    elsif ( $args[1] =~ /^paramprompt$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) &&
+             ($args[2] !~ /^off$/i) )
+        {
+            printLine("ERROR: set paramprompt <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $paramprompt = 1;
+        }
+        else {
+            $paramprompt = 0;
+        }
+    }
+    #
+    # set autosize <ON|off>
+    #
+    elsif ( $args[1] =~ /^autosize$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set autosize <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $autosize = 1;
+        }
+        else {
+            $autosize = 0;
+            for my $key ( keys %auto_width ) {
+                $auto_width{$key} = undef;
+            }
+        }
+    }
+    #
+    # set autowrap <ON|off>
+    #
+    elsif ( $args[1] =~ /^autowrap$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set autowrap <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $autowrap = 1;
+        }
+        else {
+            $autowrap = 0;
+        }
+    }
+    #
+    # set columntrunc <on|OFF>
+    #
+    elsif ( $args[1] =~ /^columntrunc$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set columntrunc <on|OFF>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $columntrunc = 1;
+        }
+        else {
+            $columntrunc = 0;
+        }
+    }
+    #
+    # set columnwrap <ON|off>
+    #
+    elsif ( $args[1] =~ /^columnwrap$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set columnwrap <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $columnwrap = 1;
+        }
+        else {
+            $columnwrap = 0;
+        }
+    }
+    #
+    #
+    # set verbose <on|off>
+    #
+    elsif ( $args[1] =~ /^verbose$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set verbose <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $verbose = 1;
+        }
+        else {
+            $verbose = 0;
+        }
+    }
+    #
+    # set pagebreaks <ON|off>
+    #
+    elsif ( $args[1] =~ /^pagebreaks$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set pagebreaks <ON|off>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $pagebreaks = 1;
+        }
+        else {
+            $pagebreaks = 0;
+        }
+    }
+    #
+    # set pager <on|OFF>
+    #
+    elsif ( $args[1] =~ /^pager$/i ) {
+        if ( (@args != 3) && ($args[2] !~ /^on$/i) && 
+             ($args[2] !~ /^off$/i) ) 
+        {
+            printLine("ERROR: set pager <on|OFF>\n");
+        }
+        elsif ( $args[2] =~ /on/i ) {
+            $use_pager = 1;
+        }
+        else {
+            $use_pager = 0;
+        }
+    }
+    #
+    # set pagercommand [<pagercommand>]
+    #
+    elsif ( $args[1] =~ /^pagercommand$/i ) {
+        if ( @args != 3 ) {
+            printLine("ERROR: set pagercommand <command>\n");
+        }
+        else {
+            $pager_command = $args[2];
+        }
+    }
+    #
+    # set output [<filename>]
+    #
+    elsif ( $args[1] =~ /^output$/i ) {
+        if ( (@args != 2) && (@args != 3) ) {
+            printLine("ERROR: set output [<filename>]\n");
+        }
+        elsif ( (@args == 2) || ((@args == 3) && ($args[2] =~ /^off$/i)) ) {
+            $output_file = "";
+            close ( OUT );
+        }
+        elsif ( @args == 3 ) {
+            $output_file = $args[2];
+            open ( OUT, ">$output_file" ) || warn "$!\n";
+        }
+        else {
+            printLine("ERROR: set output [<filename>]\n");
+        }
+    }
+    #
+    # set seperator <column_seperator>
+    #
+    elsif ( $args[1] =~ /^seperator$/i ) {
+        if ( @args == 2 ) {
+            $column_seperator = " ";
+        }
+        else {
+            # Possible seperators can be optionally enclosed by quotes.
+            # The Perl is really ugly to split something up seperated
+            # by a character that can have an embedded character.  See
+            # the Perl FAQ to see how ugly I mean.  Instead, we have
+            # access to the original line, so just check for the quote
+            # in it.
+            if ( ($args[2] =~ /^\".*\"$/) || $args[2] =~ /^\"/ && $args[$#args] =~ /\"$/ ) {
+                $column_seperator = $line;
+                ($column_seperator) = $column_seperator =~ /\"(.+)\"/;
+            }
+            else {
+                $column_seperator = $args[2];
+            }
+        }
+    }
+    #
+    # set trigger script <name>
+    #
+    elsif ( $args[1] =~ /^trigger$/i && $args[2] =~ /^script$/i ) {
+        if ( @args != 4 ) { 
+            printLine("ERROR: set trigger script <filename>\n");
+        }
+        else {
+            eval " require \"$args[3]\" ";
+            printLine("ERROR: " . $@) if ($@);
+        }
+    }
+    #
+    # set trigger row [<subroutine>]
+    #
+    elsif ($args[1] =~ /^trigger$/i && $args[2] =~ /^row$/i ) {
+        if ( @args == 3 ) {
+	    $trigger_row_subroutine = "";
+        }
+        elsif ( @args == 4 ) {
+	    $trigger_row_subroutine = $args[3];
+        }
+        else {
+            printLine("ERROR: set trigger row [<subroutine>]\n");
+        }
+    }
+    #
+    # set trigger init [<subroutine>]
+    #
+    elsif ($args[1] =~ /^trigger$/i && $args[2] =~ /^init$/i ) {
+        if ( @args == 3 ) {
+	    $trigger_init_subroutine = "";
+        }
+        elsif ( @args == 4 ) {
+	    $trigger_init_subroutine = $args[3];
+        }
+        else {
+            printLine("ERROR: set trigger init [<subroutine>]\n");
+        }
+    }
+    #
+    # set trigger result [<subroutine>]
+    #
+    elsif ($args[1] =~ /^trigger$/i && $args[2] =~ /^result$/i ) {
+        if ( @args == 3 ) {
+	    $trigger_result_subroutine = "";
+        }
+        elsif ( @args == 4 ) {
+	    $trigger_result_subroutine = $args[3];
+        }
+        else {
+            printLine("ERROR: set trigger result [<subroutine>]\n");
+        }
+    }
+    #
+    # Unknown command
+    #
+    else {
+        printLine("ERROR: Invalid command.\nType 'help' to get a list of valid commands.\n");
+    }
+}
+
+sub executeQuery
+{
+    my ( $dbh, $sql ) = @_;
+
+    if ( !defined $dbh ) {
+        printLine ("Not connected.\n");
+        return ( -1 );        
+    }
+
+    my $abort_query = 0;
+
+    $SIG{INT} = sub { $abort_query = 1; closePager(); };
+
+    #$sql =~ s/\n/ /g;
+
+    my ( $value, $var );
+
+    my $return_sql = $sql;
+
+    while ( $abort_query == 0 && ( $paramprompt && $sql =~ /(\&\w+)/ ) ) {
+        $var = $1;
+        $output_buffer = "Enter value for $var";
+        $output_buffer .= " [$param_values{$var}]" if ( exists($param_values{$var}) );
+        printLine("$output_buffer: ");
+        chomp ( $value = readLine(*STDIN) );
+        if ( $value == -1 ) {
+            $abort_query = 1 
+        }
+        elsif ( $value eq "" ) {
+            $value = $param_values{$var};
+        }
+        else {
+            $param_values{$var} = $value;
+        }
+        $sql =~ s/$var/$value/g;
+    }
+    # Print replaced SQL
+    printLine ("$sql\n", $verbose ) if ( defined $value );
+
+    return $return_sql if ( $abort_query );
+
+    $return_sql = $sql if ( $history_substitution );
+
+    $sql =~ s/\;\s*$//;
+
+    #
+    # Turn back on AutoCommit for DDL stuff.  
+    # The Sybase.pm module has a fit when it is off and DDL is executed.
+    #
+    if (($auto_commit_supported == 1) && ($auto_commit == 0) &&
+        ($sql !~ /^\s*insert /i) && ($sql !~ /^\s*update /) && 
+        ($sql !~ /^\s*delete /i) && ($sql !~ /^\s*select /i) && 
+        ($sql !~ /^\s*commit/i) && ($sql !~ /^\s*rollback/i) && 
+        ($sql !~ /^\s*sp_/) && ($sql !~ /^\s*exec /))	# Sybase specific
+    {
+        if ( $dbh->{AutoCommit} == 0 ) {
+            $dbh->commit;
+            $dbh->{AutoCommit} = 1;
+        }
+    }
+    elsif ( $auto_commit_supported == 1 && $auto_commit == 0 && $dbh->{AutoCommit} == 1 ) {
+        $dbh->{AutoCommit} = 0;
+    }
+    elsif ( ($sql =~ /^\s*commit/i || $sql =~ /^\s*rollback/i) && 
+            ($auto_commit_supported == 0 || $dbh->{AutoCommit} == 1) ) 
+    {
+        return $return_sql;  # Can't commit/rollback with AutoCommit on.
+    } 
+    elsif ( $sql =~ /^\s*commit/i || $sql =~ /^\s*rollback/i ) {
+        $dbh->commit if ( $sql =~ /commit/ );
+        $dbh->rollback if ( $sql =~ /rollback/ );
+        printLine ("Statement processed.\n", $verbose);
+        return $return_sql;
+    }
+
+
+    my $sth = $dbh->prepare ( $sql );
+
+    if ( (defined $DBI::err && $DBI::err > 0) || !defined $sth ) {
+        printLine ("$DBI::errstr\n");
+        return ( -1 );
+    }
+
+    return $return_sql if ( $abort_query );
+
+    $sth->execute;
+    if ( defined $DBI::err && $DBI::err > 0 ) {
+        printLine ("$DBI::errstr\n");
+        return ( -1 );
+    }
+
+    return $return_sql if ( $abort_query );
+
+    if ( !$sth->{Active} ) {
+        if ( defined $sth->rows && $sth->rows >= 0 ) {
+             printLine ($sth->rows . " rows processed.\n", $verbose);
+        }
+        else {
+            printLine ("Statement processed.\n", $verbose);
+        }
+    }
+    else {
+
+        my $max_width = 0;
+
+        my $screen_rows = 25;
+        my $screen_cols = 80;
+
+        if ( $isatty ) {
+            #($screen_rows, $screen_cols) = split(/\s+/, `$STTY size`);
+            my $stty = `$STTY -a`;
+            ($screen_rows) = ($stty =~ /rows\s\=*\s*(\d+);/);
+            ($screen_cols) = ($stty =~ /columns\s\=*\s*(\d+);/);
+        }
+
+        $screen_rows = $pagesize if ( $pagesize != 0 );
+        $screen_cols = $linesize if ( $linesize != 0 );
+
+        $stdout = openPager();
+
+        do { 	# Sybase can return multiple result sets, hence a double loop.
+                # We always want to at least enter the outer loop once to start
+                # the fetch.
+		# This should be generic enough to work with other databases. 
+
+            # Calculate the maximum width of the column header for COLUMN output.
+            if ( $results_mode == COLUMN_RESULTS ) {
+                for ( my $i=0; $i < $sth->{NUM_OF_FIELDS}; $i++ ) {
+                    $max_width = ($max_width > length $sth->{NAME}->[$i]) ?
+                                 $max_width : length $sth->{NAME}->[$i]
+                }
+                $max_width = 32 if ( $max_width == 0 );
+                $max_width += 1;  	# Add on space for (:)
+            }
+
+            my $display_count = 0;
+            my $rows_returned = 0;
+
+            my ( @row, $row_ref );
+            my $rows = [];	# Cache for batches of rows
+
+            # Save the column names and precision.  
+            # After fetchall_arrayref, mysql gets rid of this attribute and
+            # if Sybase fetches multiple row sets it will be pointing to the
+            # next set while processing the final column of the current set.
+            @column_names = @ { $sth->{NAME} };
+            @column_precision = @ { $sth->{PRECISION} };
+            
+            if ( $system{database_driver} eq "mysql" ) {
+                @mysql_max_lengths = @ { $sth->{mysql_max_length} };
+            }
+
+            if ( $trigger_init_subroutine ne "" ) {
+                no strict 'refs';
+                my $result = eval { &$trigger_init_subroutine() };
+                use strict 'refs';
+                printLine("ERROR: " . $@) if ($@);
+            }
+
+            while ( $abort_query == 0 && 
+                   ($row_ref = (shift(@$rows) || # get row from cache or reload cache
+                   ($DBI::VERSION >= 1.26 && ($sth->{Active} && shift(@{$rows = $sth->fetchall_arrayref(undef,$system{max_rows})||[]}))) ||
+                   ($sth->{Active} && shift(@{$rows = $sth->fetchall_arrayref()||[]})))))
+            {
+              ++$rows_returned; 
+
+              @row = @$row_ref;
+
+              if ( $trigger_row_subroutine ne "" ) {
+                  no strict 'refs';
+                  my $result = eval { &$trigger_row_subroutine(@row) };
+                  use strict 'refs';
+                  printLine("ERROR: " . $@) if ($@);
+                  # If a positive number is returned, continue normal processing.
+                  # If 0 is returned, don't continue processing, but keep rowcount.
+                  # If a negative number if retruned, don't continue normal processing
+                  #      and don't increment the rowcount.
+                  if ( $result < 1 ) {
+                      --$rows_returned if ( $result < 0 );
+                      next;
+                  }
+              }
+
+              if ( $display_count == 0 && $results_mode != COLUMN_RESULTS ) {
+                  if ( $results_mode == ROW_RESULTS ) {
+                      # First unshift the first one because if only one row
+                      # is returned then it needs to know how to format the line.
+                      unshift @$rows, $row_ref;
+                      setColumnWidthFromData($sth, $rows);
+                      shift(@$rows);	# Undo the unshift.
+                  }
+                  displayHeader ( $sth, $screen_cols, $results_mode );
+              }
+
+              if ( ++$display_count >= ($screen_rows-1) && $results_mode == ROW_RESULTS ) {
+                  $display_count = 1;
+                  displayHeader ( $sth, $screen_cols, $results_mode ) if ( $pagebreaks );
+              }
+
+              if ( $system{database_driver} ne "Sybase" || $sth->{syb_result_type} != 4043 ) {
+                                                   # Sybase specific check
+                my ( $item );
+                my @wrapped_columns = ();
+                my $max_wrapped_columns = 0;
+
+                for ( my $i=0, my $x=0; $i < @column_names; $i++ ) {
+                    $item = $row[$i];
+                    $item = '' if (!defined $item);
+
+                    $wrapped_columns[$i] = undef if ( $columnwrap );
+
+                    my $colWidth = getColumnWidth($sth,$i);
+                    if ( $results_mode == ROW_RESULTS ) {
+
+                        if ( $autowrap && ($x + $colWidth + length($column_seperator)) > $screen_cols ) {
+                            printLine ("\n");
+                            $display_count += 1;
+                            $x = 0;
+                        }
+                        elsif ( $i > 0 ) {
+                            printLine ($column_seperator);
+                        }
+
+                        $output_buffer = formatColumn ( $colWidth, $i, $item );
+                        printLine ($output_buffer);
+
+                        $x += $colWidth + length($column_seperator);
+
+                        # If columnwrap mode is set and the length of the field
+                        # is longer than what will be displayed, store the excess
+                        # so it can get displayed.
+                        if ( $columnwrap && (length($item) > $colWidth ) ) {
+                            for ( my $j=0, my $z=$colWidth; $z < length($item); $j++, $z += $colWidth ) {
+                                $wrapped_columns[$i][$j] = substr($item,$z,length($item));
+                                $max_wrapped_columns = $j+1 if ( $j+1 > $max_wrapped_columns );
+                            }
+                        }
+                    }
+                    elsif ( $results_mode == COLUMN_RESULTS ) {
+                        $output_buffer = sprintf "%-*.*s %s\n", $max_width, $max_width, 
+                                                          "$column_names[$i]:", $item;
+                        printLine ($output_buffer);
+                    }
+                    elsif ( $results_mode == DELIM_RESULTS ) {
+                        printLine($delimeter) if ( $i > 0 );
+                        printLine($item);
+                    }
+                }
+                printLine ("\n");
+
+                # Display wrapped column info
+                if ( $results_mode == ROW_RESULTS && $columnwrap ) {
+                    for ( my $j=0; $j < $max_wrapped_columns; $j++ ) {
+                        for ( my $i=0, my $x=0; $i < @column_names; $i++ ) {
+
+                            my $colWidth = getColumnWidth($sth,$i);
+
+                            if ( $autowrap && ($x + $colWidth + length($column_seperator)) > $screen_cols ) {
+                                printLine ("\n");
+                                $x = 0;
+                            }
+                            elsif ( $i > 0 ) {
+                                printLine ($column_seperator);
+                            }
+
+                            $x += $colWidth + length($column_seperator);
+
+                            if ( !defined $wrapped_columns[$i][$j] ) { 
+                                for ( my $z=0; $z < $colWidth; $z++ ) {
+                                    printLine(" ");
+                                }
+                            }
+                            else {
+                                $output_buffer = sprintf "%-*.*s", $colWidth, $colWidth, $wrapped_columns[$i][$j];
+                                printLine ($output_buffer);
+                            }
+                        }
+                        printLine ("\n");
+                    }
+                }
+              }
+
+              last if ( ( $row_count > 0 ) && ( $rows_returned >= $row_count ) );
+              last if ( !@$rows );
+            }
+
+            my $show_result = 1;
+
+            if ( $trigger_result_subroutine ne "" && $abort_query == 0 ) {
+                no strict 'refs';
+                $show_result = eval { &$trigger_result_subroutine() };
+                use strict 'refs';
+                printLine("ERROR: " . $@) if ($@);
+            }
+
+            if ( $show_result && 
+                ($system{database_driver} ne "Sybase" || $sth->{syb_result_type} != 4043) ) 
+            {                                            # Sybase specific check
+                if ( $rows_returned >= 0 ) {
+                    printLine ("$rows_returned rows returned.\n", $verbose);
+                }
+                elsif ( $abort_query == 0 ) {
+                    # Occurs when selecting based on output of an if
+                    printLine ("Statement processed.\n", $verbose);	
+                }
+            }
+
+        } while ( $abort_query == 0 && $system{database_driver} eq "Sybase" && $sth->{syb_more_results} );
+                                                                       # Sybase specific outer loop.
+        closePager();
+
+        $sth->finish;
+        if ( defined $DBI::err && $DBI::err > 0 ) {
+            printLine ("$DBI::errstr\n");
+            return ( -1 );
+        }
+    }
+
+    if ( $abort_query ) {
+        printLine("Interupted.\n");
+    }
+
+    return ( $return_sql );
+}
+
+sub readLine
+{
+    # This method probably isn't portable as written.
+    # It handles command-line editing which is why it is a bit large.
+
+    my ( $fh, $process_history ) = @_;
+
+    my ( $char, $chars );
+
+    my $line = "";
+    my $position = 0;
+    my $history_offset = $history_index;
+
+    if ( $isatty ) {
+        if ( $BSD ) {
+            system "$STTY -echo -isig cbreak </dev/tty >/dev/tty2>&1";
+        }
+        else {
+            system "$STTY -echo -isig -icanon eol \001";
+        }
+    }
+
+    $|=1;
+    while ( $chars = sysread ($fh,$char,1) ) {
+        if ( $char =~ /\c$intr/ ) {          # Ctrl-C
+            $line = -1;
+            print "\n";
+            last;
+        }
+        elsif ( $char =~ /\c$eof/ ) {          # Ctrl-D
+            $line = $char;
+            last;
+        }
+        elsif ( $char =~ /\ca/ ) {          # Ctrl-A
+            $position = moveHome ( $line, $position );
+            next;
+        }
+        elsif ( $char =~ /\ce/ ) {          # Ctrl-E
+            $position = moveEnd ( $line, $position );
+            next;
+        }
+        elsif ( $char =~ /\c$erase/ ) {          # DEL
+            if ( $position > 0 && $position < length($line) ) {
+                print "\b", substr($line,$position), " ";
+                for ( my $j=length($line)+1; $j > $position; $j-- ) {
+                    print "\b";
+                }
+                $line = substr($line,0,$position-1) . substr($line,$position);
+                $position--;
+            }
+            elsif ( $position > 0 && length($line) ) {
+                $line = substr($line,0,length($line)-1);
+                print "\b \b";
+                $position--;
+            }
+            next;
+        }
+        elsif ( $char =~ /\c[/ ) {     # Control char - more chars follow
+
+            my ($more_chars);
+
+            $chars += sysread($fh, $more_chars, 2);
+            $char .= $more_chars;
+
+            if ( $char =~ /\c[\[[A-B]/ ) {          # Up/Down arrows
+                # These get used for command history recall.
+                # If they didn't ask us to return when special chars are
+                # entered, ignore the character.
+
+                next if ( !defined($process_history) || !$process_history );
+
+                for ( my $j=0; $j < length($line); $j++ ) {
+                    print "\b \b";
+                }
+                $line = "";
+                if ( $char =~ /\c[\[A/ ) {          # Up arrow
+                    if ( defined $history[$history_offset] ) {
+                        $line = $history[$history_offset];
+                        print "$line";
+                    }
+                    $history_offset--;
+                    if ( $history_offset < 0 ) {
+                        if ( @history == $history_size && $history_offset < 0 ) {
+                            $history_offset = $history_size - 1 ;
+                        }
+                        else {
+                            $history_offset = 0;
+                        }
+                    }
+                }
+                elsif ( $char =~ /\c[\[B/ ) {           # Down arrow
+                    if ( $history_offset != $history_index ) {
+                        $history_offset++;
+                        $history_offset = 0 if ( $history_offset >= $history_size );
+                        if ( defined $history[$history_offset] ) {
+                            $line = $history[$history_offset];
+                            print "$line";
+                        }
+                    }
+                }
+
+                $position = length($line);
+                next;
+            }
+            elsif ( $char =~ /\c[\[C/ ) {           # Right arrow
+                if ( $position < length($line) ) {
+                    $position++;
+                    print $char;
+                }
+                next;
+            }
+            elsif ( $char =~ /\c[\[D/ ) {           # Left arrow
+                if ( $position > 0 ) {
+                    $position--;
+                    print $char;
+                }
+                next;
+            }
+            elsif ( $char =~ /\c[\[\d/ ) {
+
+                $chars += sysread($fh, $more_chars, 1);
+                $char .= $more_chars;
+
+                if ( $char =~ /\c[\[1\~/ ) {          # Home key
+                    $position = moveHome ( $line, $position );
+                    next;
+                }
+                elsif ( $char =~ /\c[\[4\~/ ) {          # End key
+                    $position = moveEnd ( $line, $position );
+                    next;
+                }
+            }
+        }
+        else {
+            if ( $char eq "\n" ) {
+                print "\n";
+                $line .= "\n" if ( $line eq "" );
+                last;
+            }
+            if ( $position < length($line) ) {
+                $line = substr($line,0,$position) . $char . substr($line,$position);
+                print substr($line,$position);
+                for ( my $j=length($line)-1; $j > $position; $j-- ) {
+                    print "\b";
+                }
+            }
+            else {
+                print $char;
+                $line .= $char;
+            }
+            $position += $chars;
+        }
+    }
+    $line = -1 if ( $chars == 0 && $line eq "" );
+    $|=0;
+    if ( $isatty ) {
+        if ( $BSD ) {
+            system "$STTY echo isig -cbreak </dev/tty >/dev/tty 2>&1";
+        }
+        else {
+            system "$STTY echo isig icanon eol ^@";
+        }
+    }
+
+    return $line;
+}
+
+sub moveHome 
+{
+    my ( $line, $position ) = @_;
+
+    for ( my $j=0; $j < $position; $j++ ) {
+        print "\b";
+    }
+    $position = 0;
+    return ( $position );
+}
+
+sub moveEnd
+{
+    my ( $line, $position ) = @_;
+
+    for ( my $j=$position; $j < length($line); $j++ ) {
+        print "\c[\[C";
+    }
+    $position = length($line);
+    return ( $position );
+}
+
+sub printLine
+{
+    my ( $line, $verbose_check ) = @_;
+
+    if ( defined $verbose_check && $verbose_check ne "" && $verbose ) {
+        print $stdout $line;
+        print OUT $line if ( $output_file ne "" );
+    }
+    elsif ( !defined $verbose_check || $verbose_check eq "" ) {
+        print $stdout $line;
+        print OUT $line if ( $output_file ne "" );
+    }
+}
+
+sub displayHeader
+{
+    my ( $sth, $screen_cols, $results_mode ) = @_;
+
+    return if ( $showheaders == 0 );
+
+    #
+    # Display a column header if the results mode is "row"
+    #
+    if ( $results_mode == ROW_RESULTS && @column_names > 0 ) {
+        for ( my $i=0, my $x=0; $i < @column_names; $i++ ) {
+
+            my $colWidth = getColumnWidth($sth,$i);
+
+            if ( $autowrap && ($x + $colWidth + length($column_seperator)) > $screen_cols ) {
+                printLine ("\n");
+                $x = 0;
+            }
+            elsif ( $i > 0 ) {
+                printLine ($column_seperator);
+            }
+            $output_buffer = formatColumn ( $colWidth, $i, $column_names[$i] );
+            printLine ($output_buffer);
+            $x += $colWidth + length($column_seperator);
+        }
+        printLine("\n");
+        for ( my $i=0, my $x=0; $i < @column_names; $i++ ) {
+
+            my $colWidth = getColumnWidth($sth,$i);
+
+            if ( $autowrap && ($x + $colWidth + length($column_seperator)) > $screen_cols ) {
+                printLine ("\n");
+                $x = 0;
+            }
+            elsif ( $i > 0 ) {
+                my $new_seperator = $column_seperator;
+                $new_seperator =~ s/\s/\-/g;
+                $new_seperator =~ s/\|/\+/;
+                printLine ($new_seperator);
+            }
+            for ( my $j=0; $j < $colWidth; $j++ ) {
+                printLine ("-");
+            }
+            $x += $colWidth + length($column_seperator);
+        }
+        printLine ("\n");
+    }
+    elsif ( $results_mode == DELIM_RESULTS && @column_names > 0 ) {
+        for ( my $i=0; $i < @column_names; $i++ ) {
+            printLine ($delimeter) if ( $i > 0 );
+            printLine ($column_names[$i]);
+        }
+        printLine("\n");
+    }
+}
+
+sub parseCommandLine
+{
+    # If the first argument doesn't start with a "-" take it to mean a
+    # username for connecting to the database.
+    # format is username@server/password or username/password@server
+
+    my $start_arg = 0;
+
+    if ( $ARGV[0] =~ /^\w/ ) {
+        $start_arg = 1;
+        $ARGV[0] =~ /(\w*)([\@\w]*)([\/\w]*)([\@\w]*)/;
+        $system{username} = $1;
+        $system{password} = $3 if ( $3 ne "" );
+
+        $system{server}   = $2 if ( $2 ne "" );
+        $system{server}   = $4 if ( $4 ne "" );
+        $system{password} =~ s/^\///;
+        $system{server}   =~ s/^\@//;
+    }
+
+    for ( my $i = $start_arg; $i < @ARGV; $i++ ) {
+        if ( $ARGV[$i] =~ /^-D/ ) {
+            if ( $ARGV[$i] eq "-D" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $system{database} = $ARGV[$i];
+            }
+            else {
+                ($system{database} = $ARGV[$i]) =~ s/^-D\s*//;
+                die "Usage: $usage" if ( $system{database} eq "" );
+            }
+        }
+        elsif ( $ARGV[$i] =~ /^-I/ ) {
+            if ( $ARGV[$i] eq "-I" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $system{interfaces} = $ARGV[$i];
+            }
+            else {
+                ($system{interfaces} = $ARGV[$i]) =~ s/^-I\s*//;
+                die "Usage: $usage" if ( $system{interfaces} eq "" );
+            }
+        }
+        elsif ( $ARGV[$i] =~ /^-P/ ) {
+            if ( $ARGV[$i] eq "-P" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $system{password} = $ARGV[$i];
+            }
+            else {
+                ($system{password} = $ARGV[$i]) =~ s/^-P\s*//;
+                die "Usage: $usage" if ( $system{password} eq "" );
+            }
+        }
+        elsif ( $ARGV[$i] =~ /^-R/ ) {
+            my $arg_driver = "";
+            if ( $ARGV[$i] eq "-R" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $arg_driver = $ARGV[$i];
+            }
+            else {
+                ($arg_driver = $ARGV[$i]) =~ s/^-R\s*//;
+            }
+            die "Usage: $usage" if ( $arg_driver eq "" );
+
+            my $driver_found = 0;
+            for my $drivers ( DBI->available_drivers ) {
+                if ( $arg_driver eq $drivers ) {
+                    $system{database_driver} = $arg_driver;
+                    $driver_found = 1;
+                }
+            }
+            if ( $driver_found == 0 ) {
+                print STDERR "Unknown driver [$arg_driver].  Available drivers:\n";
+                for my $drivers ( DBI->available_drivers ) {
+                    print STDERR "\t$drivers\n";
+                }
+                die "Usage: $usage";
+            }
+        }
+        elsif ( $ARGV[$i] =~ /^-S/ ) {
+            # Sybase specific
+            if ( $ARGV[$i] eq "-S" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $system{server} = $ARGV[$i];
+            }
+            else {
+                ($system{server} = $ARGV[$i]) =~ s/^-S\s*//;
+                die "Usage: $usage" if ( $system{server} eq "" );
+            }
+        }
+        elsif ( $ARGV[$i] =~ /^-U/ ) {
+            if ( $ARGV[$i] eq "-U" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $system{username} = $ARGV[$i];
+            }
+            else {
+                ($system{username} = $ARGV[$i]) =~ s/^-U\s*//;
+                die "Usage: $usage" if ( $system{username} eq "" );
+            }
+        }
+        elsif ( $ARGV[$i] =~ /^-f/ ) {
+            my $filename = "";
+            if ( $ARGV[$i] eq "-f" ) {
+                die "Usage: $usage" if ( ++$i >= @ARGV );
+                $filename = $ARGV[$i];
+            }
+            else {
+                ($filename = $ARGV[$i]) =~ s/^-f\s*//;
+                die "Usage: $usage" if ( $filename eq "" );
+            }
+            if (openInputFile($filename) == -1) {
+                die "Usage: $usage";
+            }
+        }
+        elsif ( $ARGV[$i] eq "-h" ) {
+            printLine ($usage);
+            exit 0;
+        }
+        elsif ( $ARGV[$i] eq "-l" ) {
+            printLine ("Available DBI drivers:\n");
+            printLine ("----------------------\n");
+            for my $drivers ( DBI->available_drivers ) {
+                printLine ("$drivers\n");
+            }
+            exit 0;
+        }
+        elsif ( $ARGV[$i] eq "-n" ) {
+            $silent_connect = 1;
+        }
+        elsif ( $ARGV[$i] eq "-s" ) {
+            $verbose = 0;
+        }
+        elsif ( $ARGV[$i] eq "-V" ) {
+            displayVersion();
+            exit 0;
+        }
+        else {
+            die "Usage: $usage" if ( length ($cmd_line_sql) > 0 );
+            $cmd_line_sql = $ARGV[$i];
+        }
+    }
+
+    if ( $system{server} ne "" ) {
+        $ENV{DSQUERY} = $system{server};	# Sybase
+        $ENV{TWO_TASK} = $system{server};	# Oracle
+    }
+}
+
+sub databaseConnect
+{
+    my ( $subUser, $subPass, $subDriver, $subServer, $subDatabase ) = @_;
+
+    $system{username}        = $subUser if ( defined $subUser && $subUser ne "" );
+    $system{password}        = $subPass if ( defined $subPass && $subPass ne "" );
+    $system{database_driver} = $subDriver if ( defined $subDriver && $subDriver ne "" );
+    $system{server} = $subServer if ( defined $subServer && $subServer ne "" );
+    $system{database} = $subDatabase if ( defined $subDatabase && $subDatabase ne "" );
+
+    my ( $dbh );
+    my $password_prompt = 0;
+    my $username_prompt = 0;
+    my $login_successful = 0;
+    my $max_attempted = 0;
+    my $login_attempts = 0;
+
+    # If no database driver was specified let's try and guess
+    # what driver they actually want to use.
+    # For drivers we know we work with, try those first.  If
+    # none are detected, grab the first one in the available_drivers list.
+
+    if ( $system{database_driver} eq "" ) {
+        if ( $verbose && !$silent_connect ) {
+            print STDERR "No database driver has been specified.\n";
+        }
+
+        my $driver_list = join (",",DBI->available_drivers);
+        if ( $driver_list =~ /Oracle/ ) {
+            $system{database_driver} = "Oracle";
+        }
+        elsif ( $driver_list =~ /Sybase/ ) {
+            $system{database_driver} = "Sybase";
+        }
+        elsif ( $driver_list =~ /mysql/ ) {
+            $system{database_driver} = "mysql";
+        }
+        elsif ( $driver_list =~ /ODBC/ ) {
+            $system{database_driver} = "ODBC";
+        }
+        else {
+            $system{database_driver} = (DBI->available_drivers)[0];
+        }
+
+        if ( $system{database_driver} ne "" && $verbose && !$silent_connect ) {
+            print STDERR "Using $system{database_driver} as default driver.\n";
+        }
+        elsif ( !$silent_connect ) {
+            die "Please specify a database on the command-line or\nin the initialization file and try again.\n";
+        }
+    }
+
+    my $driver = "dbi:$system{database_driver}:";
+
+    if ( $system{database} ne "" ) {
+        if ( $system{database_driver} eq "ODBC" ) {
+            $driver .= $system{database};
+        }
+        else {
+            $driver .= "database=$system{database}";
+        }
+    }
+
+    # Sybase specific
+    if ( $system{database_driver} eq "Sybase" && $system{interfaces} ne "" ) {
+        $driver .= ";interfaces=$system{interfaces}";
+    }
+
+    # MySQL specific
+    if ( $system{database_driver} eq "mysql" ) {
+        $auto_commit_supported = 0;
+
+        if ( $system{server} ne "" ) {
+            $driver .= ";host=$system{server}";
+        }
+    }
+
+    while ( $login_successful == 0 && $max_attempted == 0 ) {
+
+        $|=1;     # Auto flush output
+
+        if ( $system{username} eq "" && !$silent_connect ) {
+            $username_prompt = 1;
+            printLine("Username: ");
+            chomp ( $system{username} = readLine(*STDIN) );
+            if ( $system{username} =~ /\c$eof/ ) {
+                printLine("\n");
+                exit 0;
+            }
+        }
+        if ( $system{password} eq "" && $isatty && !$silent_connect ) {
+            $password_prompt = 1;
+            printLine("Password: ");
+            system "$STTY -echo";
+            $system{password} = <STDIN>;
+            printLine("\n");
+            exit 0 if ( $system{password} eq "" );
+            chomp ( $system{password} );
+            system "$STTY echo";
+        }
+
+        $|=0;
+
+        $dbh = DBI->connect($driver, $system{username}, $system{password},
+                            { PrintError => 0 });
+
+print "$driver\n$system{username}\n$system{password}\n";
+
+        if ( !$silent_connect && defined $DBI::err && $DBI::err > 0 ) {
+            printLine("$DBI::errstr\n");
+            $system{username} = "" if ( $username_prompt );
+            $system{password} = "" if ( $password_prompt );
+            if ( ($username_prompt == 0 && $password_prompt == 0) || 
+                 (++$login_attempts >= 3) ) 
+            {
+                $max_attempted = 1 
+            }
+        }
+        else {
+
+            # When silent connect is on and they actually attempt a connect,
+            # then print out a message.
+            if ( $silent_connect && defined $DBI::err && $DBI::err > 0 &&
+                 $system{username} ne "" )
+            {
+                printLine("$DBI::errstr\n");
+            }
+
+            $login_successful = 1;
+
+            if ( defined $dbh && $auto_commit_supported == 1 ) {
+                $dbh->{AutoCommit} = 0;
+
+                # Set any driver options specified in the config file.
+                for my $option ( keys % { $driver_options{$system{database_driver}} } ) {
+                    $dbh->{$option} = $driver_options{$system{database_driver}}{$option};
+                }
+            }
+        }
+    }
+    die "Max login attempts.  Aborting." if ( $max_attempted );
+
+    return ( $dbh );
+}
+
+sub databaseDisconnect
+{
+    my ( $dbh ) = @_;
+
+    $dbh->disconnect if ( defined $dbh );
+}
+
+sub initSystemVars
+{
+    # All these $system variables can be set in the .psqlrc file.
+
+    $system{database_driver} = ""; # see DBI->available_drivers
+                                   # override with -R option
+    $system{interfaces} = "";      # Sybase specific
+    $system{server}     = "";
+    $system{username}   = "";
+    $system{password}   = "";
+    $system{database}   = "";
+    $system{max_rows}   = 10000;  # fetch cache size
+}
+
+sub readHistoryFile
+{
+    my ( $line );
+
+    my $file = "$ENV{'HOME'}/.psql_history";
+
+    if ( open ( HIST_FILE, $file ) ) {
+        while ( $line = <HIST_FILE> ) {
+            chomp ( $line );
+
+            if ( $history_index + 1 == $history_size ) {
+                $history_index = 0;
+            }
+            else {
+                $history_index += 1;
+            }
+            $history[$history_index] = $line;
+        }
+        close ( HIST_FILE );
+    }
+}
+
+sub addHistoryFile
+{
+    my ( $line ) = @_;
+
+    my $file = "$ENV{'HOME'}/.psql_history";
+    if ( open ( HIST_FILE, ">>$file" ) ) {
+        print HIST_FILE "$line\n";
+    }
+    close ( HIST_FILE );
+}
+
+sub readInitFile
+{
+    my ( $next_call ) = @_;
+
+    my ( $line );
+
+    my $file = $ENV{'SQLHOME'} || "$ENV{'HOME'}/.psqlrc";
+
+    if ( !defined $next_call && !open ( INIT_FILE, $file ) ) {
+        printLine ("Would you like me to create a $ENV{'HOME'}/.psqlrc file? ");
+        chomp ( $line = readLine(*STDIN) );
+        if ( $line =~ /^y(es)??/i ) {
+            createInitFile($file);
+            readInitFile ( 1 );
+        }
+    }
+    else {
+        while ( $line = <INIT_FILE> ) {
+            chomp ( $line );
+            if ( $line =~ /^system\s+(\w+)\s+(\w+)/i ) {
+                $system{$1} = $2;
+            }
+            elsif ( $line =~ /^driver\s+(\w+)\s+(\w+)\s+(\w+)/i ) {
+                $driver_options{$1}->{$2} = $3;
+            }
+            elsif ( $line =~ /^alias\s+/i ) {
+                aliasAdd($line);
+            }
+            elsif ( $line =~ /^set\s+/i ) {
+                processSetCommands($line);
+            }
+        }
+        close ( INIT_FILE );
+    }
+}
+
+sub createInitFile
+{
+    my ( $file ) = @_;
+
+    if ( !open ( INIT_FILE, ">$file" ) ) {
+        printLine ("Unable to create $file ($!).\n");
+        return;
+    }
+
+    parseCommandLine();  # Read command-line to have something to put in file.
+
+    if ( $system{database_driver} ne "" ) {
+        print INIT_FILE "system database_driver " . $system{database_driver} . "\n";
+    }
+    if ( $system{interfaces} ne "" ) {
+        print INIT_FILE "system interfaces " . $system{interfaces} . "\n";
+    }
+    if ( $system{server} ne "" ) {
+        print INIT_FILE "system server " . $system{server} . "\n";
+    }
+    if ( $system{username} ne "" ) {
+        print INIT_FILE "system username " . $system{username} . "\n";
+    }
+    if ( $system{password} ne "" ) {
+        print INIT_FILE "system password " . $system{password} . "\n";
+    }
+    if ( $system{database} ne "" ) {
+        print INIT_FILE "system database " . $system{database} . "\n";
+    }
+    if ( $system{max_rows} ne "" ) {
+        print INIT_FILE "system max_rows " . $system{max_rows} . "\n";
+    }
+
+    print INIT_FILE "set pager on\n";
+    print INIT_FILE "set seperator \" | \"\n";
+
+    if ( $system{database_driver} eq "Sybase" ) {
+        print INIT_FILE "driver Sybase syb_show_sql 1\n";
+        print INIT_FILE "driver Sybase syb_show_eed 1\n";
+        print INIT_FILE "alias desc select C.colid 'id', C.name 'column_name', T.name 'column_type', C.length 'length', C.prec 'precision', C.scale 'scale', T.allownulls 'allownulls', C.status 'is_null' from syscolumns C, sysobjects O, systypes T where C.id = O.id and C.usertype = T.usertype and lower(O.name) = lower('&1')\n";
+        print INIT_FILE "alias show if ( '&1' = 'databases' ) select name from master..sysdatabases order by name else if ( '&1' = 'tables' ) select name from sysobjects where type = 'U' order by name\n";
+        print INIT_FILE "alias find select name from sysobjects where lower(name) like lower('%&1%') and type = 'U'\n";
+    }
+
+    print INIT_FILE "alias cols set resultsmode column\n";
+    print INIT_FILE "alias rows set resultsmode row\n";
+
+    close (INIT_FILE);
+    chmod 0700, $file;
+}
+
+sub aliasAdd
+{
+    my ( $line ) = @_;
+
+    $line =~ s/^\s*//;
+
+    if ( $line =~ /^alias (\w+) (.+)/i ) {
+        $aliases{$1} = $2;
+    }
+    elsif ( $line =~ /^alias (\w+)/i ) { 
+        if ( defined $aliases{$1} ) {
+            printLine("$1 - " . $aliases{$1} . "\n");
+        }
+        else {
+            printLine("Unknown alias $1.\n");
+        }
+    }
+    elsif ( $line =~ /^alias$/i ) {
+        printLine("Aliases:\n");
+        for my $alias ( keys %aliases ) {
+            printLine("\t$alias - " . $aliases{$alias} . "\n");
+        }
+    }
+    else {
+        printLine ("Syntax error: alias <alias_name> <command>\n");
+    }
+}
+
+sub aliasRemove
+{
+    my ( $line ) = @_;
+
+    $line =~ s/^\s*//;
+
+    if ( $line =~ /^unalias (\w+)/i ) { 
+        if ( defined $aliases{$1} ) {
+            undef $aliases{$1};
+        }
+        else {
+            printLine("Unknown alias $1.\n");
+        }
+    }
+    else {
+        printLine ("Syntax error: unalias <alias_name>\n");
+    }
+}
+
+sub aliasParse
+{
+    my ( $line ) = @_;
+
+    $line =~ s/^\s*//;
+
+    return ( $line ) if ( aliasLookup($line) == 0 );
+
+    $line =~ s/\;\s*$//;
+
+    print OUT "$line\n" if ( $verbose && $output_file ne "" );
+
+    $line =~ s/\;\s*$//;
+
+    my @args = split(/\s+/, $line);
+    my $sql = $aliases{$args[0]};
+
+    my ( $var, $var_num );
+
+    while ( $sql =~ /(\&\w+)/ ) {
+        $var = $1;
+        ($var_num = $var) =~ s/\&//;
+        $sql =~ s/$var/$args[$var_num]/g;
+    }
+    return ( $sql );
+}
+
+sub aliasLookup
+{
+    my ($line) = @_;
+
+    $line =~ s/^\s*//;
+    $line =~ s/\;\s*$//;  # Allow semi-colons at the end
+
+    my ( $first ) = split (/\s+/, $line);
+
+    for my $alias ( keys %aliases ) {
+        return 1 if ( (lc($alias) eq lc($first)) && defined($aliases{$alias}));
+    }
+    return 0;
+}
+
+sub getColumnWidth
+{
+    my ( $sth, $idx ) = @_;
+
+    my $column_width = 10;
+
+    if ( defined $column_widths{$column_names[$idx]} ) {
+        $column_width = $column_widths{$column_names[$idx]};
+    }
+    elsif ( defined $auto_width{$column_names[$idx]} ) {
+        $column_width = $auto_width{$column_names[$idx]};
+    }
+    elsif ( $column_precision[$idx] < length($column_names[$idx]) ) {
+        $column_width = length($column_names[$idx]);
+    }
+    else {
+        $column_width = $column_precision[$idx];
+    }
+    return ( $column_width );
+}
+
+sub setColumnWidthFromData
+{
+    my ( $sth, $rows ) = @_;
+
+    return if ( $autosize == 0 );
+    return if ( !defined $sth->{NUM_OF_FIELDS} );
+
+#    if ( $system{database_driver} eq "mysql" ) {
+#        for ( my $idx=0; $idx < @column_names; $idx++ ) {
+#            if ( !defined $auto_width{$column_names[$idx]} ||
+#                  $auto_width{$column_names[$idx]} < $mysql_max_lengths[$idx] )
+#            {
+#                if ( $mysql_max_lengths[$idx] > 0 ) {
+#                    $auto_width{$column_names[$idx]} = $mysql_max_lengths[$idx];
+#                }
+#            }
+#        }
+#    }
+#    else {
+        for my $key ( keys %auto_width ) {
+            $auto_width{$key} = undef;
+        }
+        for my $item ( @$rows ) {
+            my @data = @$item;
+            for ( my $idx=0; $idx < @column_names; $idx++ ) {
+                if ( !defined $auto_width{$column_names[$idx]} ||
+                     $auto_width{$column_names[$idx]} < length($data[$idx]) )
+                {
+                    #print length($data[$idx]), " ", $column_names[$idx], " ", $data[$idx], "\n";
+                    if ( length($data[$idx]) > 0 ) {
+                        $auto_width{$column_names[$idx]} = length($data[$idx]);
+                    }
+                    elsif ( length($data[$idx]) == 0 ) {
+                        $auto_width{$column_names[$idx]} = length($column_names[$idx]);
+                    }
+
+                    if ( !$columntrunc && ($auto_width{$column_names[$idx]} < length($column_names[$idx]))) {
+                        $auto_width{$column_names[$idx]} = length($column_names[$idx]);
+                    }
+                }
+            }
+        }
+#    }
+    return ( 1 );
+}
+
+sub formatColumn
+{
+    my ( $colWidth, $colIndex, $item ) = @_;
+
+    if ( exists $column_justify{$column_names[$colIndex]} ) {
+        if ( $column_justify{$column_names[$colIndex]} =~ /right/i ) {
+            $output_buffer = sprintf "%*.*s", $colWidth, $colWidth, $item;
+        }
+        elsif ( $column_justify{$column_names[$colIndex]} =~ /center/i ) {
+            my $pad_spaces = $colWidth - length($item);
+            $pad_spaces = 0 if ( $pad_spaces < 0 );
+            $pad_spaces /= 2;
+            $output_buffer = "";
+            for ( my $i=0; $i < $pad_spaces; $i++ ) {
+                $output_buffer .= " ";
+            }
+            $output_buffer .= sprintf "%-*.*s", $colWidth-$pad_spaces, $colWidth-$pad_spaces, $item;
+        }
+        else {
+            $output_buffer = sprintf "%-*.*s", $colWidth, $colWidth, $item;
+        }
+    }
+    else {
+        $output_buffer = sprintf "%-*.*s", $colWidth, $colWidth, $item;
+    }
+    return $output_buffer;
+}
+
+sub closeAndDie
+{
+    my ( $dbh, $msg ) = @_;
+
+    databaseDisconnect ( $dbh );
+    die $msg;
+}
+
+sub openPager
+{
+    if ( $use_pager ) {
+        close(PIPE);
+        if (open (PIPE, "| $pager_command" ) ) {
+            $stdout = *PIPE;
+        }
+    }
+    return $stdout;
+}
+
+sub closePager
+{
+    close(PIPE); 
+    $stdout = *STDOUT;
+    return $stdout;
+}
+
+sub openInputFile
+{
+    my ( $filename ) = @_;
+
+    $filename =~ s/\;\s*$//;
+
+    if (open (INPUT, "$filename" ) ) {
+        $stdin = *INPUT;
+        $read_stdin = 0;
+    }
+    elsif ( $filename !~ /\.sql$/ && open(INPUT, "$filename.sql") ) {
+        $stdin = *INPUT;
+        $read_stdin = 0;
+    }
+    else {
+        if ( $filename ne "" ) {
+            printLine "Unable to open $filename for reading ($!).\n";
+        }
+        return ( -1 );
+    }
+    return ( $stdin );
+}
+
+sub closeInputFile
+{
+    close(INPUT);
+    $stdin = *STDIN;
+    $read_stdin = 1; 
+    return $stdin;
+}
+
+sub displayHistory
+{
+    openPager();
+    printLine("Command History:\n") if ( $history_index != -1 );
+    for ( my $i = 0, my $j = $history_index+1; $i < $history_size; $i++ ) {
+        if ( defined $history[$j] ) {
+            $output_buffer = sprintf "\t%d> %s", $j+1, $history[$j];
+            printLine($output_buffer);
+            printLine("\n") if ( $history[$j] !~ /\n/ );
+        }
+        if ( ++$j >= $history_size ) { $j = 0; }
+    }
+    closePager();
+}
+
+sub displayHelp
+{
+    openPager();
+    printLine("Valid Commands:\n");
+    for ( my $i=0; $i < @commands; $i++ ) {
+        printLine("\t$commands[$i]\n");
+    }
+    printLine("Valid Set Commands:\n");
+    for ( my $i=0; $i < @set_commands; $i++ ) {
+        printLine("\t$set_commands[$i]\n");
+    }
+    closePager();
+}
+
+sub displayVersion
+{
+    printLine ("\n".VERSION."\n");
+    printLine ("Perl Version: " . $] . "\n");
+    printLine ("DBI Version: " . $DBI::VERSION . "\n");
+
+    my ( $version );
+    my $dbd = "DBD::$system{database_driver}";
+    my $var = "DBD::" . $system{database_driver} . "::VERSION";
+
+    no strict 'refs';
+    eval "require $dbd";
+    $version = $$var; 
+    use strict 'refs';
+    printLine("DBD::" . $system{database_driver} . ": $version\n");
+
+    my $os = `uname -a`;  chomp ($os);
+    printLine("$os\n\n");
+}
+
+sub license 
+{
+    my $license =  <<EOT;
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+EOT
+
+    openPager();
+    printLine($license);
+    closePager();
+}
+
+1;
